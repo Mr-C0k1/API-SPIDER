@@ -60,6 +60,3 @@ Jika ada pertanyaan, buka Issue di repository ini!
 
 # DISCLAMER 
 Jangan gunakan tools ini untuk melakukan testing atau penetrations testing yang ilegal, admin tidak bertanggung jawab jika di gunakan dalam hal kejahatan siber
-git clone https://github.com/Tuan-Kok1/API-SPIDER.git
-cd API-SPIDER
-pip install requests  # jika belum terinstall
