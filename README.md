@@ -57,6 +57,3 @@ Proyek ini dilisensikan di bawah GNU General Public License v3.0 - lihat file LI
 Dibuat oleh Tuan-Kok1
 Jika ada pertanyaan, buka Issue di repository ini!
 🕷️ Happy Hunting! 🕷️"
-
-# DISCLAMER 
-Jangan gunakan tools ini untuk melakukan testing atau penetrations testing yang ilegal, admin tidak bertanggung jawab jika di gunakan dalam hal kejahatan siber
