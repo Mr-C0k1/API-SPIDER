@@ -12,6 +12,12 @@ import os
 from urllib.parse import urlparse, urljoin
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
+from bs4.builder import XMLParsedAsHTMLWarning  # <-- Tambahan untuk filter warning
+import warnings
+
+# --- FILTER WARNING BEAUTIFULSOUP (Hilangkan XMLParsedAsHTMLWarning) ---
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+
 import dns.resolver
 
 # --- GRACEFUL SHUTDOWN ---
@@ -59,7 +65,7 @@ USER_AGENTS = [
 ]
 
 COMMON_PATHS = [
-    "", "/v1", "/api", "/api/v1", "/api/v2", "/swagger-ui.html", "/swagger.json", "/openapi.json", 
+    "", "/v1", "/api", "/api/v1", "/api/v2", "/swagger-ui.html", "/swagger.json", "/openapi.json",
     "/.env", "/config", "/debug", "/health", "/metrics", "/.git/config", "/admin", "/graphql",
     "/robots.txt", "/sitemap.xml", "/actuator", "/phpinfo.php", "/info", "/status"
 ]
@@ -153,19 +159,16 @@ def run_amass_enum(domain):
 def enumerate_subdomains(domain, use_amass=True, no_brute=False):
     base_domain = domain.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
     print(f"\n[🔍] DEEP SUBDOMAIN ENUMERATION untuk: {base_domain}")
-
     if use_amass:
         amass_subs = run_amass_enum(base_domain)
         FOUND_SUBDOMAINS.update(amass_subs)
         print(f" [+] Ditemukan {len(amass_subs)} dari Amass")
-
     crt_subs = fetch_subdomains_from_crtsh(base_domain)
     for sub in crt_subs:
         if sub not in FOUND_SUBDOMAINS:
             FOUND_SUBDOMAINS.add(sub)
             print(f" [+] SUBDOMAIN (crt.sh): {sub}")
             log_finding(f"SUBDOMAIN CRT.SH: {sub}")
-
     if not no_brute:
         try:
             wordlist = []
@@ -181,14 +184,12 @@ def enumerate_subdomains(domain, use_amass=True, no_brute=False):
             FOUND_SUBDOMAINS.update(brute_subs)
         except Exception as e:
             print(f"[!] Error brute: {e}")
-
     www_sub = f"www.{base_domain}"
     if resolve_subdomain(www_sub) and www_sub not in FOUND_SUBDOMAINS:
         FOUND_SUBDOMAINS.add(www_sub)
-
     print(f"\n[✔] Total subdomain ditemukan: {len(FOUND_SUBDOMAINS)}\n")
 
-# === SCANNING FUNCTIONS (ringkas) ===
+# === SCANNING FUNCTIONS ===
 def extract_links(response, base_url):
     links = set()
     if 'json' in response.headers.get('Content-Type', ''):
@@ -217,36 +218,31 @@ def scan_endpoint(base_url, path="", proxy=None, delay=1.0, depth=0):
     target = urljoin(base_url, path)
     if target in VISITED: return
     VISITED.add(target)
-
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     try:
         requests.packages.urllib3.disable_warnings()
         r = requests.get(target, headers=headers, proxies=proxy, timeout=12, verify=False, allow_redirects=True)
-        
+       
         if r.status_code == 200:
             print(f" [+] FOUND (200): {target}")
             log_finding(f"FOUND 200: {target}")
-
             for label, pattern in SENSITIVE_PATTERNS.items():
                 matches = re.findall(pattern, r.text, re.IGNORECASE)
                 if matches:
                     print(f" [🔥] ALERT: {label} leak → {target}")
                     log_finding(f"LEAK {label}: {target}")
-
             if any(kw in r.text.lower() for kw in ["swagger", "openapi", "redoc"]):
                 print(f" [📖] API DOCS FOUND: {target}")
                 for ep in parse_swagger(r, base_url):
                     scan_endpoint(base_url, ep[len(base_url):], proxy, delay, depth+1)
-
             for link in extract_links(r, base_url):
                 rel = urlparse(link).path or "/"
                 scan_endpoint(base_url, rel, proxy, delay, depth+1)
-
         elif r.status_code in [401, 403]:
             print(f" [🔒] PROTECTED ({r.status_code}): {target}")
-        
+       
         time.sleep(delay + random.uniform(0.3, 1.0))
-    
+   
     except: pass
 
 def start_scan_on_domain(target_url, delay, proxies):
@@ -254,7 +250,6 @@ def start_scan_on_domain(target_url, delay, proxies):
     print(f"\n[🎯] SCANNING TARGET: {target_url}")
     get_shodan_info(urlparse(target_url).netloc)
     VISITED.clear()
-
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = []
         for path in COMMON_PATHS:
@@ -324,11 +319,8 @@ def main():
         if SHUTDOWN: break
         url = raw if raw.startswith("http") else "https://" + raw
         domain = urlparse(url).netloc or urlparse(url).path.split("/")[0]
-
         print(f"\n{'='*60}\n[🌎] TARGET: {domain}\n{'='*60}")
-
         enumerate_subdomains(domain, use_amass=not args.no_amass, no_brute=args.no_brute)
-
         target_list = [url]
         for sub in FOUND_SUBDOMAINS:
             sub_url = f"https://{sub}"
@@ -336,11 +328,9 @@ def main():
                 target_list.append(sub_url)
                 all_urls.append(sub_url)
         all_urls.append(url)
-
         for t in target_list:
             if SHUTDOWN: break
             start_scan_on_domain(t, args.delay, proxy_list)
-
         FOUND_SUBDOMAINS.clear()
 
     if not args.no_nuclei and not SHUTDOWN:
