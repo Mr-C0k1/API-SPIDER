@@ -1,119 +1,148 @@
 #!/bin/bash
-
-# API Hunter Pure Curl - One Command Full Scan
-# Usage: ./apihunter-curl.sh https://target.com
-# atau ./apihunter-curl.sh target.com
+# API Hunter Upgraded - Pure Curl with Better Detection
+# Usage: ./apihunter-upgraded.sh <https://target.com> [wordlist.txt]
+# Wordlist opsional: file txt dengan satu path per baris untuk fuzzing tambahan
 
 TARGET="$1"
+WORDLIST="$2"
+
 if [[ -z "$TARGET" ]]; then
-    echo "Usage: $0 <target-url>"
-    echo "Contoh: $0 https://example.com"
+    echo "Usage: $0 <target-url> [custom-wordlist.txt]"
+    echo "Contoh: $0 https://example.com apis.txt"
     exit 1
 fi
 
 [[ ! "$TARGET" =~ ^http ]] && TARGET="https://$TARGET"
 TARGET="${TARGET%/}"
 
-echo -e "\033[1;34m[+] Memulai API Hunter Pure Curl pada: $TARGET\033[0m"
+echo -e "\033[1;34m[+] Memulai API Hunter Upgraded pada: $TARGET\033[0m"
 echo "=================================================="
 
+# Daftar paths built-in yang lebih lengkap
 PATHS=(
-    ""
-    "/.env" "/config" "/backup" "/db" "/admin" "/login"
-    "/api" "/api/v1" "/v1" "/v2" "/graphql"
-    "/swagger" "/swagger-ui.html" "/swagger.json" "/openapi.json" "/docs"
-    "/debug" "/health" "/metrics" "/status" "/info" "/phpinfo.php"
-    "/.git/HEAD" "/.git/config" "/robots.txt" "/sitemap.xml"
-    "/server-status" "/actuator" "/trace"
+    "" "/api" "/api/v1" "/api/v2" "/api/v3" "/v1" "/v2" "/v3" "/graphql" "/graph"
+    "/rest" "/json" "/ws" "/websocket" "/socket.io"
+    "/swagger" "/swagger-ui.html" "/swagger.json" "/swagger/v1/swagger.json"
+    "/openapi.json" "/docs" "/redoc" "/api-docs" "/apidoc"
+    "/.env" "/env" "/config" "/backup" "/db" "/admin" "/login" "/auth" "/dashboard"
+    "/debug" "/health" "/healthz" "/ping" "/metrics" "/status" "/info" "/version" "/phpinfo.php"
+    "/.git/HEAD" "/.git/config" "/robots.txt" "/sitemap.xml" "/web.config"
+    "/server-status" "/actuator" "/trace" "/env.js" "/config.json"
+    "/users" "/accounts" "/profile" "/settings" "/me"
 )
 
-# Tambahan paths untuk potensi IDOR testing (endpoint dengan ID parameter)
-IDOR_PATHS=(
-    "/api/user/1" "/api/user/2"
-    "/profile/1" "/profile/2"
-    "/api/account/1" "/api/account/2"
-    "/user/1" "/user/2"
-    "/api/item/1" "/api/item/2"
+# Tambah IDOR base paths lebih banyak
+IDOR_BASES=(
+    "/api/user/" "/api/users/" "/api/account/" "/api/profile/"
+    "/user/" "/profile/" "/api/item/" "/api/order/" "/api/post/"
 )
 
-for path in "${PATHS[@]}"; do
-    url="$TARGET$path"
-    response=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}|%{url_effective}" -k -m 10 "$url")
-    code=$(echo $response | cut -d'|' -f1)
-    size=$(echo $response | cut -d'|' -f2)
-    final_url=$(echo $response | cut -d'|' -f3)
+# Regex secrets lebih komprehensif
+SECRET_REGEX='(?i)(api[_-]?key|token|secret|password|passwd|auth|bearer|aws_access_key_id|aws_secret_access_key|sk_live_|pk_live_|stripe[_-]?key|firebase|heroku|slack|discord|jwt|private[_-]?key|AKIA[0-9A-Z]{16}|ghp_[0-9a-zA-Z]{36}|ya29\.[0-9a-zA-Z\-_]+|AIza[0-9A-Za-z\-_]{35}|sq0.[0-9a-zA-Z\-_]+|EAI.[0-9A-Za-z\-_]{30,}|eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*)[\s:=]+["'\''`]?[a-zA-Z0-9\-_+.=/{}/]{20,}["'\''`]?'
 
-    # Hanya proses jika ada response
-    if [[ "$code" == "000" ]]; then continue; fi
+# Header tabel
+printf "%-10s %-8s %-10s %s\n" "HTTP CODE" "SIZE" "REDIRECT?" "URL"
+echo "---------------------------------------------------------------"
 
-    # Highlight temuan menarik
+# Fungsi untuk check path
+check_path() {
+    local path="$1"
+    local url="$TARGET$path"
+    local response=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}|%{redirect_url}|%{url_effective}" -k -m 15 --max-redirs 5 "$url")
+    local code=$(echo "$response" | cut -d'|' -f1)
+    local size=$(echo "$response" | cut -d'|' -f2)
+    local redirect=$(echo "$response" | cut -d'|' -f3)
+    local final_url=$(echo "$response" | cut -d'|' -f4)
+
+    if [[ "$code" == "000" ]]; then return; fi
+
+    # Print ringkasan tabel
+    if [[ -n "$redirect" ]]; then redirect="YES"; else redirect="NO"; fi
+    printf "%-10s %-8s %-10s %s\n" "$code" "$size" "$redirect" "$final_url"
+
+    # Highlight temuan kritis
     if [[ "$code" == "200" ]]; then
-        if [[ "$path" == *".env"* || "$path" == *".git"* || "$path" == *"config"* || "$path" == *"backup"* ]]; then
-            echo -e "\033[1;31m[CRITICAL] $code → $final_url (SIZE: $size bytes)\033[0m"
-            curl -s -k "$url" | head -20
-            echo
-        elif [[ "$path" == *"/swagger"* || "$path" == *"/openapi"* || "$path" == *"/docs"* ]]; then
-            echo -e "\033[1;33m[API DOCS] $code → $final_url\033[0m"
-        elif [[ "$path" == *"/debug"* || "$path" == *"/admin"* || "$path" == *"/phpinfo"* ]]; then
-            echo -e "\033[1;35m[POTENTIAL EXPOSED] $code → $final_url\033[0m"
-        else
-            content=$(curl -s -k "$url")
-            if echo "$content" | grep -qiE "(api[_-]?key|token|secret|password|aws_access_key|bearer|sk_live_|pk_live_)" >/dev/null; then
-                echo -e "\033[1;31m[LEAK DETECTED] $code → $final_url\033[0m"
-                echo "$content" | grep -iE "(api[_-]?key|token|secret|password|aws_access_key|bearer|sk_live_|pk_live_)" | head -5
-                echo
-            fi
-        fi
+        local content=$(curl -s -k "$url" --max-time 15)
 
-        # Deteksi token spesifik dengan regex lengkap
-        if [[ "$code" == "200" ]]; then
-            content=$(curl -s -k "$url")
-            leaks=$(echo "$content" | grep -ioE 'sk_(live|test)_[0-9a-zA-Z]{24}|sq0(atp|csp|idp|cs|ic|pca|u|cs|ac|cp|cg|cs|idp)_[0-9a-zA-Z\-_]{22,}|ATATT[0-9a-zA-Z]{3,}|cloud_id:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|heroku [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|HEROKU_API_KEY=[0-9a-f]{8}-|ya29\.[0-9a-zA-Z\-_]{80,}|1//[0-9a-zA-Z\-_]{70,}|AKIA[0-9A-Z]{16}|[0-9a-zA-Z/+]{40}|https://[a-z0-9-]+\.firebaseio\.com|"apiKey":\s*"AIza[0-9a-zA-Z]{35}"|eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*|(api[-_]?key|token|secret|auth|password|bearer)[\s:=]+["'']?[a-zA-Z0-9\-_]{20,}["'']?' | head -n 10)
+        # Critical exposed files
+        if echo "$path" | grep -Ei '\.env|config|backup|\.git|db|phpinfo'; then
+            echo -e "\033[1;31m[CRITICAL EXPOSED] $final_url (SIZE: $size bytes)\033[0m"
+            echo "$content" | head -20
+            echo
+
+        # API Docs
+        elif echo "$path" | grep -Ei 'swagger|openapi|docs|redoc'; then
+            echo -e "\033[1;33m[API DOCUMENTATION FOUND] $final_url\033[0m"
+
+        # Potential debug/admin
+        elif echo "$path" | grep -Ei 'debug|admin|actuator|trace|metrics|health'; then
+            echo -e "\033[1;35m[POTENTIAL EXPOSED PANEL/DEBUG] $final_url\033[0m"
+
+        # Secrets leak detection
+        else
+            local leaks=$(echo "$content" | grep -aioE "$SECRET_REGEX" | sort -u | head -10)
             if [[ -n "$leaks" ]]; then
-                echo -e "\033[1;31m[DETAILED LEAK DETECTED] $code → $final_url\033[0m"
+                echo -e "\033[1;31m[SECRETS LEAK DETECTED] $final_url\033[0m"
                 echo "$leaks"
                 echo
             fi
         fi
+
     elif [[ "$code" == "401" || "$code" == "403" ]]; then
-        echo -e "\033[1;36m[PROTECTED] $code → $final_url\033[0m"
+        echo -e "\033[1;36m[PROTECTED - AUTH REQUIRED] $code → $final_url\033[0m"
+    elif [[ "$code" == "301" || "$code" == "302" ]]; then
+        echo -e "\033[1;32m[REDIRECT] $code → $final_url (to $redirect)\033[0m"
     fi
+}
+
+# Scan built-in paths (parallel untuk cepat)
+for path in "${PATHS[@]}"; do
+    check_path "$path" &
 done
 
-# Deteksi potensi IDOR (Insecure Direct Object Reference)
-echo -e "\033[1;34m[+] Memulai Deteksi Potensi IDOR\033[0m"
+# Jika ada custom wordlist, scan juga
+if [[ -f "$WORDLIST" ]]; then
+    echo -e "\033[1;34m[+] Fuzzing dengan custom wordlist: $WORDLIST\033[0m"
+    while read -r custom_path; do
+        [[ -z "$custom_path" || "$custom_path" =~ ^# ]] && continue
+        check_path "$custom_path" &
+    done < "$WORDLIST"
+fi
+
+wait  # Tunggu semua background process selesai
+
+# IDOR Detection Upgraded
+echo -e "\n\033[1;34m[+] Memulai Deteksi Potensi IDOR (Lebih Banyak Base)\033[0m"
 echo "=================================================="
-for base_path in "${IDOR_PATHS[@]}" ; do
-    # Ambil base tanpa ID terakhir
-    base=$(dirname "$base_path")
-    id1="${base_path##*/1}"  # Asumsi ID 1
-    id2="${base_path##*/2}"  # Asumsi ID 2, bisa diganti dengan ID random
 
-    url1="$TARGET$base/1"
-    url2="$TARGET$base/2"
-    url_random="$TARGET$base/$((RANDOM % 1000000 + 1000000))"  # ID random tinggi untuk cek non-existent
+for base in "${IDOR_BASES[@]}"; do
+    url1="$TARGET$base""1"
+    url2="$TARGET$base""2"
+    url_rand1="$TARGET$base""$((RANDOM % 900000 + 100000))"
+    url_rand2="$TARGET$base""$((RANDOM % 900000 + 100000))"
 
-    # Curl ke ID 1
-    code1=$(curl -s -o /dev/null -w "%{http_code}" -k -m 10 "$url1")
-    content1=$(curl -s -k "$url1")
+    resp1=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}" -k -m 10 "$url1")
+    resp2=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}" -k -m 10 "$url2")
+    resp_r1=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}" -k -m 10 "$url_rand1")
 
-    # Curl ke ID 2
-    code2=$(curl -s -o /dev/null -w "%{http_code}" -k -m 10 "$url2")
-    content2=$(curl -s -k "$url2")
+    code1=$(echo "$resp1" | cut -d'|' -f1)
+    size1=$(echo "$resp1" | cut -d'|' -f2)
+    code2=$(echo "$resp2" | cut -d'|' -f1)
+    size2=$(echo "$resp2" | cut -d'|' -f2)
+    code_r=$(echo "$resp_r1" | cut -d'|' -f1)
+    size_r=$(echo "$resp_r1" | cut -d'|' -f2)
 
-    # Curl ke ID random (untuk cek non-existent)
-    code_random=$(curl -s -o /dev/null -w "%{http_code}" -k -m 10 "$url_random")
-    content_random=$(curl -s -k "$url_random")
+    content1=$(curl -s -k "$url1" | head -c 500)
+    content2=$(curl -s -k "$url2" | head -c 500)
 
-    if [[ "$code1" == "200" && "$code2" == "200" && "$code1" != "$code_random" && "$content1" != "$content2" ]]; then
-        echo -e "\033[1;31m[POTENSI IDOR] Akses ke $url1 dan $url2 berhasil tanpa auth, konten berbeda. Cek manual!\033[0m"
-        echo "Response ID 1 (snippet): ${content1:0:100}"
-        echo "Response ID 2 (snippet): ${content2:0:100}"
+    if [[ "$code1" == "200" && "$code2" == "200" && "$content1" != "$content2" && "$size1" != "$size2" ]]; then
+        echo -e "\033[1;31m[POTENSI IDOR TINGGI] $base → ID 1 & 2 berbeda konten (size: $size1 vs $size2)\033[0m"
+        echo "Snippet ID1: ${content1:0:150}..."
+        echo "Snippet ID2: ${content2:0:150}..."
         echo
-    elif [[ "$code1" == "200" && "$code_random" == "200" ]]; then
-        echo -e "\033[1;33m[POTENSI IDOR LEMAH] Akses ke ID random $url_random berhasil. Mungkin open access, cek manual.\033[0m"
-        echo
+    elif [[ "$code1" == "200" && "$code_r" == "200" ]]; then
+        echo -e "\033[1;33m[POTENSI OPEN ACCESS] ID random $url_rand1 berhasil (size: $size_r)\033[0m"
     fi
 done
 
-echo -e "\033[1;32m[+] Scan selesai! Semua temuan di atas adalah hasil nyata dari curl.\033[0m"
+echo -e "\033[1;32m[+] Scan selesai! Gunakan dengan bijak & hanya pada target yang diizinkan.\033[0m"
