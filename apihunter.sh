@@ -1,7 +1,7 @@
 #!/bin/bash
-# API Hunter - Pure Curl Recon Tool (Fixed v2 - No Errors)
-# Usage: ./apihunter.sh https://target.com [wordlist.txt]
-# Contoh: ./apihunter.sh https://example.com apis.txt
+# API Hunter Curl - Fixed SSL Errors & Stable (Pure Curl Recon)
+# Usage: ./apihunter-curl.sh https://target.com [wordlist.txt]
+# Contoh: ./apihunter-curl.sh https://example.com apis.txt
 
 TARGET="$1"
 WORDLIST="$2"
@@ -19,7 +19,7 @@ fi
 # Hilangkan trailing slash
 TARGET="${TARGET%/}"
 
-echo -e "\033[1;34m[+] Memulai API Hunter pada: $TARGET\033[0m"
+echo -e "\033[1;34m[+] Memulai API Hunter Curl pada: $TARGET\033[0m"
 echo "=================================================="
 
 # Built-in paths
@@ -41,23 +41,24 @@ IDOR_BASES=(
     "/user/" "/profile/" "/api/item/" "/api/order/" "/api/post/"
 )
 
-# Regex secrets (simplified untuk hindari quote issue)
+# Regex secrets (diperbaiki, simplified untuk avoid quote errors)
 SECRET_REGEX='(api[_-]?key|token|secret|password|auth|bearer|aws_access_key|sk_live_|pk_live_|stripe[_-]?key|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9-_=]+)[\s:=]+[a-zA-Z0-9\-_]{20,}'
 
 # Header tabel
 printf "%-10s %-10s %-10s %s\n" "CODE" "SIZE" "REDIRECT" "URL"
 echo "--------------------------------------------------------------------------------"
 
-# Fungsi check path (fixed quotes & escapes)
+# Fungsi check path (fixed SSL dengan -k always, error handling)
 check_path() {
     local path="$1"
     local url="$TARGET$path"
     
-    # Curl header only
+    # Curl header only, dengan -k untuk bypass SSL errors
     local response=$(curl -s -o /dev/null -w "%{http_code}|%{size_download}|%{redirect_url}|%{url_effective}" \
                          -k --max-time 15 --max-redirs 5 "$url" 2>/dev/null)
     
     if [[ -z "$response" || "$response" =~ ^000 ]]; then
+        echo -e "\033[1;31m[SKIP] Timeout/SSL Error on $url\033[0m"
         return
     fi
     
@@ -106,13 +107,14 @@ check_path() {
     fi
 }
 
-# Export untuk background
+# Export untuk background jobs
 export -f check_path
 export TARGET SECRET_REGEX
 
-# Scan built-in (parallel)
+# Scan built-in (parallel, max 10 jobs agar tidak overload)
 for path in "${PATHS[@]}"; do
     check_path "$path" &
+    if [[ $(jobs -r -p | wc -l) -ge 10 ]]; then wait -n; fi
 done
 
 # Custom wordlist
@@ -120,12 +122,13 @@ if [[ -n "$WORDLIST" && -f "$WORDLIST" ]]; then
     echo -e "\033[1;34m[+] Fuzzing wordlist: $WORDLIST\033[0m"
     grep -v '^#' "$WORDLIST" | grep -v '^$' | while read -r custom_path; do
         check_path "$custom_path" &
+        if [[ $(jobs -r -p | wc -l) -ge 10 ]]; then wait -n; fi
     done
 fi
 
 wait
 
-# IDOR Detection (fixed total - no more errors)
+# IDOR Detection (fixed, dengan -k)
 echo -e "\n\033[1;34m[+] Deteksi Potensi IDOR\033[0m"
 echo "=================================================="
 
@@ -158,3 +161,6 @@ for base in "${IDOR_BASES[@]}"; do
         echo -e "\033[1;33m[OPEN ACCESS] ID random $rand_id di ${base} (size: $size_r)\033[0m"
     fi
 done
+
+echo -e "\033[1;32m[+] Scan selesai! Hasil nyata dari target (SSL bypassed).\033[0m"
+echo -e "\033[1;37m[+] Ethical use only! Jika error persist, update ca-certificates: sudo apt update && sudo apt install ca-certificates\033[0m"
